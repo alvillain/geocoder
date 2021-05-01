@@ -48,4 +48,5 @@ const (
 	GRS_INVALID_REQUEST  GoogleResponseStatus = "INVALID_REQUEST"
 	GRS_UNKNOWN_ERROR    GoogleResponseStatus = "UNKNOWN_ERROR"
 	GRS_OVER_QUERY_LIMIT GoogleResponseStatus = "OVER_QUERY_LIMIT"
+	GRS_OK               GoogleResponseStatus = "OK"
 )
