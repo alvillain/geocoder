@@ -22,6 +22,10 @@ func (c *FakeHTTPClient) Get(targetURL string) (*http.Response, error) {
 	return &http.Response{Body: r}, c.err
 }
 
+type FakeRequestObserver struct{}
+
+func (c *FakeRequestObserver) ObserveHTTPRequest(label string, duration time.Duration) {}
+
 func Test_SignRequest(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -47,7 +51,7 @@ func Test_SignRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Log(tt.name)
 
-			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 10, time.Second)
+			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 10, time.Second, &FakeRequestObserver{})
 			res, err := geocoder.getSignature(tt.URL)
 
 			if res != tt.expectedSignature {
@@ -98,7 +102,7 @@ func Test_ReverseGeocode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Log(tt.name)
 
-			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 5, tt.overQueryLimitDuration)
+			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 5, tt.overQueryLimitDuration, nil)
 			var wg sync.WaitGroup
 
 			for i := 0; i < 5; i++ {

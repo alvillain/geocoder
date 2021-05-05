@@ -20,6 +20,10 @@ type HTTPClient interface {
 	Get(targetURL string) (*http.Response, error)
 }
 
+type RequestObserver interface {
+	ObserveHTTPRequest(label string, duration time.Duration)
+}
+
 type Geocoder struct {
 	// Google BusinessKey
 	businessKey *BusinessKey
@@ -33,12 +37,14 @@ type Geocoder struct {
 	rps int
 	// Sleep interval if OVER_QUERY_LIMIT status has been received
 	overQuerySleepDuration time.Duration
-	limiter                *rate.Limiter
+	// Measure HTTP requests duration
+	observer RequestObserver
+	limiter  *rate.Limiter
 }
 
 // NewGeocoder creates new instance of Geocoder
 func NewGeocoder(bkey *BusinessKey, baseURL, language string, client HTTPClient,
-	requestPerSecond int, overQuerySleepDuration time.Duration) (*Geocoder, error) {
+	requestPerSecond int, overQuerySleepDuration time.Duration, observer RequestObserver) (*Geocoder, error) {
 	if bkey == nil {
 		return nil, errors.New("empty BusinessKey")
 	}
@@ -58,6 +64,7 @@ func NewGeocoder(bkey *BusinessKey, baseURL, language string, client HTTPClient,
 			client,
 			requestPerSecond,
 			overQuerySleepDuration,
+			observer,
 			rate.NewLimiter(rate.Limit(requestPerSecond), 1)},
 		nil
 }
@@ -82,9 +89,13 @@ func (g *Geocoder) ReverseGeocode(ctx context.Context, lat, lng float64) (*Googl
 	}
 	targetURL += "&signature=" + signature
 
+	t := time.Now()
 	resp, err := g.client.Get(targetURL)
 	if err != nil {
 		return nil, err
+	}
+	if g.observer != nil {
+		g.observer.ObserveHTTPRequest("google", time.Since(t))
 	}
 
 	var res *GoogleResponse
