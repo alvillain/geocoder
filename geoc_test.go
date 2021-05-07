@@ -12,19 +12,19 @@ import (
 	"time"
 )
 
-type FakeHTTPClient struct {
+type fakeHttpRequester struct {
 	responseBodyJSON string
 	err              error
 }
 
-func (c *FakeHTTPClient) Get(targetURL string) (*http.Response, error) {
+func (c *fakeHttpRequester) Get(targetURL string) (*http.Response, error) {
 	r := ioutil.NopCloser(bytes.NewReader([]byte(c.responseBodyJSON)))
 	return &http.Response{Body: r}, c.err
 }
 
-type FakeRequestObserver struct{}
+type fakeRequestObserver struct{}
 
-func (c *FakeRequestObserver) ObserveHTTPRequest(label string, duration time.Duration) {}
+func (c *fakeRequestObserver) ObserveHTTPRequest(label string, duration time.Duration) {}
 
 func Test_SignRequest(t *testing.T) {
 	tests := []struct {
@@ -32,7 +32,7 @@ func Test_SignRequest(t *testing.T) {
 		BusinessKey       *BusinessKey
 		URL               string
 		Language          string
-		client            *FakeHTTPClient
+		client            *fakeHttpRequester
 		expectedSignature string
 		expectedError     error
 	}{
@@ -41,8 +41,17 @@ func Test_SignRequest(t *testing.T) {
 			&BusinessKey{ClientID: "my_test_client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local"},
 			"/maps/api/geocode/xml?latlng=49.17584440,7.30196070&sensor=false&client=my_test_client&channel=grg-local",
 			"en",
-			&FakeHTTPClient{},
+			&fakeHttpRequester{},
 			"fGNFKf3Yt6Syb9dRF42E7vm1FwM=",
+			nil,
+		},
+		{
+			"Test Signing 1",
+			&BusinessKey{ClientID: "my_test_client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local"},
+			"/maps/api/geocode/json?channel=grg-local&client=my_test_client&language=en&latlng=45.32000000%2C12.67000000&sensor=false",
+			"en",
+			&fakeHttpRequester{},
+			"bdwh-bmlibC2w2N_A2tgt7pSuAE=",
 			nil,
 		},
 	}
@@ -51,7 +60,7 @@ func Test_SignRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Log(tt.name)
 
-			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 10, time.Second, &FakeRequestObserver{})
+			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 10, time.Second, &fakeRequestObserver{})
 			res, err := geocoder.getSignature(tt.URL)
 
 			if res != tt.expectedSignature {
@@ -71,7 +80,7 @@ func Test_ReverseGeocode(t *testing.T) {
 		BusinessKey            *BusinessKey
 		URL                    string
 		Language               string
-		client                 *FakeHTTPClient
+		client                 *fakeHttpRequester
 		overQueryLimitDuration time.Duration
 		expectedResponse       *GoogleResponse
 		expectedError          error
@@ -81,7 +90,7 @@ func Test_ReverseGeocode(t *testing.T) {
 			&BusinessKey{ClientID: "my_test_client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local"},
 			"https://maps.googleapis.com/maps/api/geocode/json",
 			"en",
-			&FakeHTTPClient{responseBodyJSON: "", err: errors.New("failed")},
+			&fakeHttpRequester{responseBodyJSON: "", err: errors.New("failed")},
 			time.Nanosecond,
 			nil,
 			errors.New("failed"),
@@ -91,7 +100,7 @@ func Test_ReverseGeocode(t *testing.T) {
 			&BusinessKey{ClientID: "my_test_client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local"},
 			"https://maps.googleapis.com/maps/api/geocode/json",
 			"en",
-			&FakeHTTPClient{responseBodyJSON: `{"status":"OVER_QUERY_LIMIT"}`},
+			&fakeHttpRequester{responseBodyJSON: `{"status":"OVER_QUERY_LIMIT"}`},
 			time.Millisecond * 100,
 			&GoogleResponse{Status: GRS_OVER_QUERY_LIMIT},
 			nil,
@@ -125,6 +134,60 @@ func Test_ReverseGeocode(t *testing.T) {
 				}()
 			}
 			wg.Wait()
+		})
+	}
+}
+
+func Test_buildURL(t *testing.T) {
+	tests := []struct {
+		name          string
+		BusinessKey   *BusinessKey
+		URL           string
+		Language      string
+		client        *fakeHttpRequester
+		lat           float64
+		lng           float64
+		expectedURL   string
+		expectedError error
+	}{
+		{
+			"Should build url",
+			&BusinessKey{ClientID: "my_test_client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local"},
+			"https://maps.googleapis.com/maps/api/geocode/json",
+			"en",
+			&fakeHttpRequester{},
+			45.32,
+			12.67,
+			"https://maps.googleapis.com/maps/api/geocode/json?channel=grg-local&client=my_test_client&language=en&latlng=45.32000000%2C12.67000000&sensor=false&signature=bdwh-bmlibC2w2N_A2tgt7pSuAE%3D",
+			nil,
+		},
+		{
+			"Should build escaped url",
+			&BusinessKey{ClientID: "my&test&client", SigningKey: "bXlfdGVzdF9rZXk=", Channel: "grg-local!@#$%^&*() "},
+			"https://maps.googleapis.com/maps/api/geocode/json",
+			"en",
+			&fakeHttpRequester{},
+			45.32,
+			12.67,
+			"https://maps.googleapis.com/maps/api/geocode/json?channel=grg-local%21%40%23%24%25%5E%26%2A%28%29+&client=my%26test%26client&language=en&latlng=45.32000000%2C12.67000000&sensor=false&signature=Ui0NkXF9aJEZHtjQ-H1-V333LUk%3D",
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Log(tt.name)
+
+			geocoder, _ := NewGeocoder(tt.BusinessKey, tt.URL, tt.Language, tt.client, 10, time.Second, &fakeRequestObserver{})
+			res, err := geocoder.buildURL(tt.lat, tt.lng)
+
+			if res.String() != tt.expectedURL {
+				t.Errorf("test for %v Failed - results not match\nGot:\n%v\nExpected:\n%v", tt.name, res.String(), tt.expectedURL)
+			}
+
+			if err != nil && tt.expectedError != nil && tt.expectedError.Error() != err.Error() {
+				t.Errorf("test for %v Failed - results not match\nGot:\n%v\nExpected:\n%v", tt.name, err, tt.expectedError)
+			}
 		})
 	}
 }

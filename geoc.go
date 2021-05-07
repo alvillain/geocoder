@@ -16,7 +16,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type HTTPClient interface {
+type HttpRequester interface {
 	Get(targetURL string) (*http.Response, error)
 }
 
@@ -32,18 +32,18 @@ type Geocoder struct {
 	// Set language to control output language of the geocoder. Leave empty to keep default behavior
 	language string
 	// HTTP Client
-	client HTTPClient
+	client HttpRequester
 	// Requests per second
 	rps int
 	// Sleep interval if OVER_QUERY_LIMIT status has been received
 	overQuerySleepDuration time.Duration
-	// Measure HTTP requests duration
+	// Measures HTTP requests duration
 	observer RequestObserver
 	limiter  *rate.Limiter
 }
 
 // NewGeocoder creates new instance of Geocoder
-func NewGeocoder(bkey *BusinessKey, baseURL, language string, client HTTPClient,
+func NewGeocoder(bkey *BusinessKey, baseURL, language string, client HttpRequester,
 	requestPerSecond int, overQuerySleepDuration time.Duration, observer RequestObserver) (*Geocoder, error) {
 	if bkey == nil {
 		return nil, errors.New("empty BusinessKey")
@@ -76,24 +76,18 @@ func (g *Geocoder) ReverseGeocode(ctx context.Context, lat, lng float64) (*Googl
 	if err != nil {
 		return nil, err
 	}
-	targetURL := g.buildURL(lat, lng)
-
-	ur, err := url.Parse(targetURL)
+	ur, err := g.buildURL(lat, lng)
 	if err != nil {
 		return nil, err
 	}
-
-	signature, err := g.getSignature(ur.Path + "?" + ur.RawQuery)
-	if err != nil {
-		return nil, err
-	}
-	targetURL += "&signature=" + signature
 
 	t := time.Now()
-	resp, err := g.client.Get(targetURL)
+	resp, err := g.client.Get(ur.String())
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
+
 	if g.observer != nil {
 		g.observer.ObserveHTTPRequest("google", time.Since(t))
 	}
@@ -102,7 +96,6 @@ func (g *Geocoder) ReverseGeocode(ctx context.Context, lat, lng float64) (*Googl
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	if res.Status == GRS_OVER_QUERY_LIMIT {
 		g.limiter.SetLimit(rate.Limit(0))
@@ -113,22 +106,40 @@ func (g *Geocoder) ReverseGeocode(ctx context.Context, lat, lng float64) (*Googl
 	return res, nil
 }
 
-func (g *Geocoder) buildURL(lat, lng float64) string {
-	result := g.baseURL + "?latlng=" + fmt.Sprintf("%.8f,%.8f", lat, lng) + "&sensor=false"
-
-	if g.language != "" {
-		result += "&language=" + url.QueryEscape(g.language)
+// buildURL constructs url for further reverse geocode request
+func (g *Geocoder) buildURL(lat, lng float64) (*url.URL, error) {
+	ur, err := url.Parse(g.baseURL)
+	if err != nil {
+		return nil, err
 	}
 
+	query := url.Values{}
+	query.Add("latlng", fmt.Sprintf("%.8f,%.8f", lat, lng))
+	query.Add("sensor", "false")
+	if g.language != "" {
+		query.Add("language", g.language)
+	}
 	if g.businessKey != nil {
-		result += "&client=" + url.QueryEscape(g.businessKey.ClientID)
+		query.Add("client", g.businessKey.ClientID)
 		if g.businessKey.Channel != "" {
-			result += "&channel=" + url.QueryEscape(g.businessKey.Channel)
+			query.Add("channel", g.businessKey.Channel)
 		}
 	}
-	return result
+
+	ur.RawQuery = query.Encode()
+
+	signature, err := g.getSignature(ur.Path + "?" + ur.RawQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	query.Add("signature", signature)
+	ur.RawQuery = query.Encode()
+
+	return ur, nil
 }
 
+// getSignature returns a signature of the targetURL using Google client's signing key
 func (g *Geocoder) getSignature(targetURL string) (string, error) {
 	sKey := strings.ReplaceAll(g.businessKey.SigningKey, "-", "+")
 	sKey = strings.ReplaceAll(sKey, "_", "/")
@@ -140,10 +151,13 @@ func (g *Geocoder) getSignature(targetURL string) (string, error) {
 
 	h := hmac.New(sha1.New, signingKeyBytes)
 	_, err = h.Write([]byte(targetURL))
+	if err != nil {
+		return "", err
+	}
 
 	hash := base64.StdEncoding.EncodeToString(h.Sum(nil))
 	hash = strings.ReplaceAll(hash, "+", "-")
 	hash = strings.ReplaceAll(hash, "/", "_")
 
-	return hash, err
+	return hash, nil
 }
